@@ -1478,8 +1478,11 @@ bool gz::sim::systems::ArduPilotPlugin::ReceiveServoPacket()
     }
     else
     {
-        // Otherwise skip quickly and do not set control force.
-        waitMs = 1;
+        // Otherwise skip quickly and do not set control force. This poll runs
+        // on every physics step, so any non-zero timeout is dead wall-clock
+        // time for as long as the FCS stays away: against a 1ms step, waiting
+        // even 1ms here costs roughly a third of the achievable RTF.
+        waitMs = 0;
     }
 
     // 16 / 32 channel compatibility

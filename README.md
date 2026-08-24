@@ -182,6 +182,14 @@ A new model whose mesh references textures this way needs its own entry.
 `DynamicFactory(): Unable to parse descriptor set from ... gz-msgs12.gz_desc`
 is printed at startup by the conda-forge build and is harmless.
 
+#### Performance
+
+Expect a real time factor near 1.0, and around 0.9 with the GUI open. If the
+GUI is slower than that, check which GPU Gazebo is using: on a machine with
+both integrated and discrete graphics, Windows tends to hand OpenGL to the
+integrated one. Assign the discrete GPU to `gz-sim-gui.exe` and
+`gz-sim-server.exe` under Settings > System > Display > Graphics.
+
 ## Configure
 
 Set the Gazebo environment variables in your `.bashrc` or `.zshrc` or in 
