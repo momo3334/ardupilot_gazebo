@@ -1,7 +1,12 @@
 build/
 Build/
+build-win64/
 bin/
 lib/
+install/
+
+# pixi
+.pixi/
 msg_gen/
 srv_gen/
 msg/*Action.msg

@@ -1,5 +1,11 @@
-cmake_minimum_required(VERSION 3.10.2 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.16 FATAL_ERROR)
 project(ardupilot_gazebo)
+
+# --------------------------------------------------------------------------- #
+# Options.
+
+option(BUILD_GST_CAMERA_PLUGIN
+  "Build GstCameraPlugin. Requires GStreamer and OpenCV." ON)
 
 # --------------------------------------------------------------------------- #
 # If ament_cmake is found build as an ament package, otherwise ignore.
@@ -10,8 +16,8 @@ if(${ament_cmake_FOUND})
 endif()
 
 # --------------------------------------------------------------------------- #
-# Compile as C++14.
-set(CMAKE_CXX_STANDARD 14)
+# Compile as C++17, the minimum required by all supported Gazebo releases.
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # --------------------------------------------------------------------------- #
@@ -83,10 +89,34 @@ endif()
 
 # --------------------------------------------------------------------------- #
 find_package(RapidJSON REQUIRED)
-find_package(OpenCV REQUIRED)
+find_package(Threads REQUIRED)
 
-pkg_check_modules(GST REQUIRED gstreamer-1.0 gstreamer-app-1.0)
+if(BUILD_GST_CAMERA_PLUGIN)
+  find_package(PkgConfig REQUIRED)
+  find_package(OpenCV REQUIRED)
+  pkg_check_modules(GST REQUIRED gstreamer-1.0 gstreamer-app-1.0)
+endif()
 
+# --------------------------------------------------------------------------- #
+# Settings shared by every plugin.
+
+function(configure_ardupilot_plugin target)
+  target_include_directories(${target} PRIVATE include)
+  target_link_libraries(${target} PRIVATE Threads::Threads)
+
+  if(WIN32)
+    # NOMINMAX stops windows.h defining min/max macros that break std::min and
+    # std::max. WIN32_LEAN_AND_MEAN stops it pulling in the Winsock 1.1
+    # headers, which clash with the winsock2.h that SocketUDP.hh needs.
+    target_compile_definitions(${target} PRIVATE
+      NOMINMAX
+      WIN32_LEAN_AND_MEAN
+      _USE_MATH_DEFINES
+      _WINSOCK_DEPRECATED_NO_WARNINGS
+      _CRT_SECURE_NO_WARNINGS
+    )
+  endif()
+endfunction()
 
 # --------------------------------------------------------------------------- #
 # Build plugin.
@@ -97,20 +127,23 @@ add_library(ArduPilotPlugin
     src/SocketUDP.cc
     src/Util.cc
 )
+configure_ardupilot_plugin(ArduPilotPlugin)
 target_include_directories(ArduPilotPlugin PRIVATE
-  include
+  ${RapidJSON_INCLUDE_DIRS}
 )
 target_link_libraries(ArduPilotPlugin PRIVATE
   gz-sim${GZ_SIM_VER}::gz-sim${GZ_SIM_VER}
 )
+if(WIN32)
+  # Winsock, for SocketUDP.
+  target_link_libraries(ArduPilotPlugin PRIVATE ws2_32)
+endif()
 
 add_library(ParachutePlugin
   SHARED
   src/ParachutePlugin.cc
 )
-target_include_directories(ParachutePlugin PRIVATE
-  include
-)
+configure_ardupilot_plugin(ParachutePlugin)
 target_link_libraries(ParachutePlugin PRIVATE
   gz-sim${GZ_SIM_VER}::gz-sim${GZ_SIM_VER}
 )
@@ -119,40 +152,49 @@ add_library(CameraZoomPlugin
   SHARED
   src/CameraZoomPlugin.cc
 )
-target_include_directories(CameraZoomPlugin PRIVATE
-  include
-)
+configure_ardupilot_plugin(CameraZoomPlugin)
 target_link_libraries(CameraZoomPlugin PRIVATE
   gz-common${GZ_COMMON_VER}::gz-common${GZ_COMMON_VER}
   gz-rendering${GZ_RENDERING_VER}::gz-rendering${GZ_RENDERING_VER}
   gz-sim${GZ_SIM_VER}::gz-sim${GZ_SIM_VER}
 )
 
-add_library(GstCameraPlugin
-  SHARED
-  src/GstCameraPlugin.cc
+set(ARDUPILOT_GAZEBO_PLUGINS
+  ArduPilotPlugin
+  ParachutePlugin
+  CameraZoomPlugin
 )
-target_include_directories(GstCameraPlugin PRIVATE
-  include
-  ${OpenCV_INCLUDE_DIRS}
-  ${GST_INCLUDE_DIRS}
-)
-target_link_libraries(GstCameraPlugin PRIVATE
-  gz-sim${GZ_SIM_VER}::gz-sim${GZ_SIM_VER}
-  ${OpenCV_LIBS}
-  ${GST_LINK_LIBRARIES}
-)
+
+if(BUILD_GST_CAMERA_PLUGIN)
+  add_library(GstCameraPlugin
+    SHARED
+    src/GstCameraPlugin.cc
+  )
+  configure_ardupilot_plugin(GstCameraPlugin)
+  target_include_directories(GstCameraPlugin PRIVATE
+    ${OpenCV_INCLUDE_DIRS}
+    ${GST_INCLUDE_DIRS}
+  )
+  target_link_directories(GstCameraPlugin PRIVATE
+    ${GST_LIBRARY_DIRS}
+  )
+  target_link_libraries(GstCameraPlugin PRIVATE
+    gz-sim${GZ_SIM_VER}::gz-sim${GZ_SIM_VER}
+    ${OpenCV_LIBS}
+    ${GST_LINK_LIBRARIES}
+  )
+  list(APPEND ARDUPILOT_GAZEBO_PLUGINS GstCameraPlugin)
+endif()
 
 # --------------------------------------------------------------------------- #
 # Install.
 
 install(
   TARGETS
-  ArduPilotPlugin
-  ParachutePlugin
-  CameraZoomPlugin
-  GstCameraPlugin
-  DESTINATION lib/${PROJECT_NAME}
+  ${ARDUPILOT_GAZEBO_PLUGINS}
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+  LIBRARY DESTINATION lib/${PROJECT_NAME}
+  ARCHIVE DESTINATION lib/${PROJECT_NAME}
 )
 
 install(

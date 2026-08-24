@@ -27,6 +27,10 @@ namespace gz
 {
 namespace sim
 {
+// Nesting inside the version namespace, as the other plugins here do, is what
+// keeps gz::sim::systems from becoming ambiguous against the gz::sim::vN::
+// systems that gz-sim declares through its own inline version namespace.
+inline namespace GZ_SIM_VERSION_NAMESPACE {
 namespace systems
 {
 /// \todo(srmainwaring) handle 16 or 32 based on magic
@@ -89,7 +93,11 @@ class ArduPilotPluginPrivate;
 ///                       with wall-time
 /// <have_32_channels>    set true if 32 channels are enabled
 ///
-class GZ_SIM_VISIBLE ArduPilotPlugin:
+// Deliberately not tagged with GZ_SIM_VISIBLE: that macro expands to
+// __declspec(dllimport) for consumers of gz-sim, which would make MSVC look
+// for this class in gz-sim.dll. The plugin entry points are exported by
+// GZ_ADD_PLUGIN instead, as for the other plugins in this project.
+class ArduPilotPlugin:
   public gz::sim::System,
   public gz::sim::ISystemConfigure,
   public gz::sim::ISystemPostUpdate,
@@ -183,6 +191,7 @@ class GZ_SIM_VISIBLE ArduPilotPlugin:
 };
 
 }  // namespace systems
+}  // namespace GZ_SIM_VERSION_NAMESPACE
 }  // namespace sim
 }  // namespace gz
 

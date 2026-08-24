@@ -22,10 +22,54 @@
 #include <cstring>
 
 
+namespace {
+
+#ifdef _WIN32
+/// \brief Winsock has to be started up once per process before any socket
+/// call, and shut down again when the last user goes away.
+class WinsockContext {
+public:
+    WinsockContext() {
+        WSADATA wsaData;
+        started = WSAStartup(MAKEWORD(2, 2), &wsaData) == 0;
+    }
+
+    ~WinsockContext() {
+        if (started) {
+            WSACleanup();
+        }
+    }
+
+    bool started{false};
+};
+#endif
+
+/// \brief Prepare the platform socket library for use.
+void init_socket_library() {
+#ifdef _WIN32
+    static WinsockContext context;
+    (void)context;
+#endif
+}
+
+/// \brief Report the most recent socket error. Winsock does not set errno.
+void report_socket_error(const char *what) {
+#ifdef _WIN32
+    std::fprintf(stderr, "%s: Winsock error %d\n", what, WSAGetLastError());
+#else
+    perror(what);
+#endif
+}
+
+}  // namespace
+
+
 SocketUDP::SocketUDP(bool reuseaddress, bool blocking) {
+    init_socket_library();
+
     fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd < 0) {
-        perror("SocketUDP creation failed");
+    if (fd == kInvalidSocket) {
+        report_socket_error("SocketUDP creation failed");
         exit(EXIT_FAILURE);
     }
 
@@ -44,10 +88,20 @@ SocketUDP::SocketUDP(bool reuseaddress, bool blocking) {
 
 
 SocketUDP::~SocketUDP() {
-    if (fd != -1) {
-        ::close(fd);
-        fd = -1;
+    close_socket();
+}
+
+
+void SocketUDP::close_socket() {
+    if (fd == kInvalidSocket) {
+        return;
     }
+#ifdef _WIN32
+    ::closesocket(fd);
+#else
+    ::close(fd);
+#endif
+    fd = kInvalidSocket;
 }
 
 
@@ -56,13 +110,9 @@ bool SocketUDP::bind(const char *address, uint16_t port) {
     make_sockaddr(address, port, server_addr);
 
     if (::bind(fd, reinterpret_cast<sockaddr *>(&server_addr),
-               sizeof(server_addr)) != 0) {
-        perror("SocketUDP Bind failed");
-#ifdef _WIN32
-        closesocket(fd);
-#else
-        close(fd);
-#endif
+               static_cast<int>(sizeof(server_addr))) != 0) {
+        report_socket_error("SocketUDP Bind failed");
+        close_socket();
         return false;
     }
     return true;
@@ -71,46 +121,61 @@ bool SocketUDP::bind(const char *address, uint16_t port) {
 
 bool SocketUDP::set_reuseaddress() {
     int one = 1;
-    return (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) != -1);
+    return (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
+                       reinterpret_cast<const char *>(&one),
+                       static_cast<int>(sizeof(one))) != -1);
 }
 
 
 bool SocketUDP::set_blocking(bool blocking) {
-    int fcntl_ret;
 #ifdef _WIN32
     u_long mode = blocking ? 0 : 1;
-    fcntl_ret = ioctlsocket(fd, FIONBIO, reinterpret_cast<u_long FAR *>(&mode));
+    return ioctlsocket(fd, FIONBIO, &mode) != SOCKET_ERROR;
 #else
-    if (blocking) {
-        fcntl_ret = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) & ~O_NONBLOCK);
-    } else {
-        fcntl_ret = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags == -1) {
+        return false;
     }
+    if (blocking) {
+        flags &= ~O_NONBLOCK;
+    } else {
+        flags |= O_NONBLOCK;
+    }
+    return fcntl(fd, F_SETFL, flags) != -1;
 #endif
-    return fcntl_ret != -1;
 }
 
 
-ssize_t SocketUDP::sendto(const void *buf, size_t size, const char *address,
-                          uint16_t port) {
+SocketSSize SocketUDP::sendto(const void *buf, size_t size,
+                              const char *address, uint16_t port) {
     struct sockaddr_in sockaddr_out{};
     make_sockaddr(address, port, sockaddr_out);
 
-    return ::sendto(fd, buf, size, 0,
+    return ::sendto(fd, static_cast<const char *>(buf),
+                    static_cast<int>(size), 0,
                     reinterpret_cast<sockaddr *>(&sockaddr_out),
-                    sizeof(sockaddr_out));
+                    static_cast<int>(sizeof(sockaddr_out)));
 }
 
 /*
   receive some data
  */
-ssize_t SocketUDP::recv(void *buf, size_t size, uint32_t timeout_ms) {
+SocketSSize SocketUDP::recv(void *buf, size_t size, uint32_t timeout_ms) {
     if (!pollin(timeout_ms)) {
         return -1;
     }
-    socklen_t len = sizeof(in_addr);
-    return ::recvfrom(fd, buf, size, MSG_DONTWAIT,
-                      reinterpret_cast<sockaddr *>(&in_addr), &len);
+
+#ifdef _WIN32
+    // Winsock has no MSG_DONTWAIT. pollin() has already established that a
+    // datagram is queued, so an ordinary recvfrom will not block here.
+    const int flags = 0;
+#else
+    const int flags = MSG_DONTWAIT;
+#endif
+
+    socklen_t len = sizeof(this->in_addr);
+    return ::recvfrom(fd, static_cast<char *>(buf), static_cast<int>(size),
+                      flags, reinterpret_cast<sockaddr *>(&in_addr), &len);
 }
 
 
@@ -127,10 +192,17 @@ bool SocketUDP::pollin(uint32_t timeout_ms) {
     FD_ZERO(&fds);
     FD_SET(fd, &fds);
 
-    tv.tv_sec = timeout_ms / 1000;
-    tv.tv_usec = (timeout_ms % 1000) * 1000UL;
+    tv.tv_sec = static_cast<long>(timeout_ms / 1000);
+    tv.tv_usec = static_cast<long>((timeout_ms % 1000) * 1000UL);
 
-    if (select(fd + 1, &fds, nullptr, nullptr, &tv) != 1) {
+#ifdef _WIN32
+    // Winsock ignores the descriptor count and takes it from the fd_set.
+    const int nfds = 0;
+#else
+    const int nfds = fd + 1;
+#endif
+
+    if (select(nfds, &fds, nullptr, nullptr, &tv) != 1) {
         return false;
     }
     return true;

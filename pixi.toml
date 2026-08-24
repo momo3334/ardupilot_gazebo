@@ -1,0 +1,58 @@
+[workspace]
+name = "ardupilot_gazebo"
+version = "0.0.0"
+description = "ArduPilot plugins and models for vehicle simulation in Gazebo Sim"
+channels = ["conda-forge"]
+platforms = ["win-64"]
+
+[dependencies]
+# Gazebo Jetty (gz-sim 10, gz-common 7, gz-rendering 10, gz-cmake 5).
+gz-jetty = "1.0.*"
+
+# ArduPilotPlugin.
+rapidjson = "*"
+
+# GstCameraPlugin. OpenCV 5 renamed/moved a number of imgproc symbols, so the
+# plugin is kept on the 4.x series that the Linux packages also provide.
+libopencv = "4.*"
+gstreamer = "1.*"
+gst-plugins-base = "1.*"
+gst-plugins-good = "1.*"
+gst-plugins-bad = "1.*"
+gst-plugins-ugly = "1.*"
+gst-libav = "1.*"
+
+# Build tooling.
+cmake = "*"
+ninja = "*"
+pkg-config = "*"
+
+[target.win-64.dependencies]
+# Activation shim only: it locates an existing MSVC installation with vswhere
+# and exports INCLUDE/LIB/PATH. Visual Studio 2022 Build Tools with the
+# "Desktop development with C++" workload must be installed separately.
+vs2022_win-64 = "*"
+
+[activation.env]
+GZ_VERSION = "jetty"
+
+# GZ_SIM_SYSTEM_PLUGIN_PATH and GZ_SIM_RESOURCE_PATH have to be built up from
+# PIXI_PROJECT_ROOT, which [activation.env] cannot do on Windows.
+[target.win-64.activation]
+scripts = ["scripts/pixi-activate.bat"]
+
+# Newlines separate commands in a pixi task, so this has to stay on one line.
+[tasks.configure]
+cmd = "cmake -S . -B build-win64 -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=install"
+
+[tasks.build]
+cmd = "cmake --build build-win64 --parallel"
+depends-on = ["configure"]
+
+[tasks.install]
+cmd = "cmake --install build-win64"
+depends-on = ["build"]
+
+[tasks.iris]
+cmd = "gz sim -v4 -r iris_runway.sdf"
+depends-on = ["build"]

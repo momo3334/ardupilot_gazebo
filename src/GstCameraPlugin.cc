@@ -20,6 +20,8 @@
 #include <gst/app/gstappsrc.h>
 #include <gst/gst.h>
 
+#include <atomic>
+#include <chrono>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -51,7 +53,6 @@ class GstCameraPlugin::Impl {
    public:
     void InitializeCamera();
     void StartStreaming();
-    static void *StartThread(void *);
     void StartGstThread();
 
     void OnImage(const msgs::Image &msg);
@@ -76,9 +77,14 @@ class GstCameraPlugin::Impl {
     // Unused by actual pipeline since it's based on the gazebo topic rate?
     unsigned int rate{5};
 
-    pthread_t threadId;
-    bool isGstMainLoopActive{false};
-    bool requestedStartStreaming{false};
+    std::thread gstThread;
+    // These flags are shared between the GStreamer thread and the gz-transport
+    // callback threads. gstThreadRunning covers the whole life of the thread,
+    // including the setup before the main loop starts, which is wider than
+    // isGstMainLoopActive.
+    std::atomic<bool> gstThreadRunning{false};
+    std::atomic<bool> isGstMainLoopActive{false};
+    std::atomic<bool> requestedStartStreaming{false};
 
     GMainLoop *gst_loop{nullptr};
     GstElement *source{nullptr};
@@ -287,21 +293,29 @@ void GstCameraPlugin::Impl::InitializeCamera()
 
 void GstCameraPlugin::Impl::StartStreaming()
 {
-    if (!isGstMainLoopActive)
+    // A thread that has run to completion, for instance after a pipeline
+    // error, still holds a joinable handle that must be cleared before it can
+    // be reused.
+    if (gstThread.joinable())
     {
-        pthread_create(&threadId, NULL, StartThread, this);
+        return;
     }
-}
-
-void *GstCameraPlugin::Impl::StartThread(void *param)
-{
-    GstCameraPlugin::Impl *impl = (GstCameraPlugin::Impl *)param;
-    impl->StartGstThread();
-    return nullptr;
+    // Set before spawning so that a StopStreaming() arriving immediately after
+    // this call still sees the thread as live.
+    gstThreadRunning = true;
+    gstThread = std::thread(&GstCameraPlugin::Impl::StartGstThread, this);
 }
 
 void GstCameraPlugin::Impl::StartGstThread()
 {
+    // Cleared on every exit path, including the early returns below, so that
+    // StopStreaming() can never spin waiting for a thread that has gone.
+    struct RunningFlag
+    {
+        std::atomic<bool> &flag;
+        ~RunningFlag() { flag = false; }
+    } runningFlag{gstThreadRunning};
+
     gst_init(nullptr, nullptr);
 
     gst_loop = g_main_loop_new(nullptr, FALSE);
@@ -566,13 +580,25 @@ void GstCameraPlugin::Impl::OnRenderTeardown()
 
 void GstCameraPlugin::Impl::StopStreaming()
 {
-    if (isGstMainLoopActive)
+    if (!gstThread.joinable())
+    {
+        isGstMainLoopActive = false;
+        return;
+    }
+
+    // A quit issued before the main loop starts running is discarded by GLib,
+    // so keep asking until the thread actually leaves. Without this the join
+    // below could wait forever on a loop that never got the message.
+    while (gstThreadRunning)
     {
         StopGstThread();
-
-        pthread_join(threadId, NULL);
-        isGstMainLoopActive = false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
+
+    // Destroying a joinable std::thread terminates the process, so the handle
+    // has to be cleared even if the main loop never started.
+    gstThread.join();
+    isGstMainLoopActive = false;
 }
 
 void GstCameraPlugin::Impl::StopGstThread()

@@ -100,6 +100,88 @@ cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo
 make -j4
 ```
 
+### Windows
+
+Gazebo supports Windows from Jetty onwards, installed from conda-forge with
+[pixi](https://pixi.sh). Both the Gazebo Windows port and this build of the
+plugins are experimental.
+
+#### Prerequisites
+
+Visual Studio 2022 Build Tools with the *Desktop development with C++*
+workload. The conda-forge Gazebo binaries are built with MSVC, so a MinGW
+toolchain cannot be used, and conda-forge cannot ship MSVC itself — its
+`vs2022_win-64` package only locates an existing installation.
+
+```powershell
+winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override `
+  "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+```
+
+Then [pixi](https://pixi.sh/latest/#installation):
+
+```powershell
+winget install prefix-dev.pixi
+```
+
+#### Build
+
+`pixi.toml` pins Gazebo Jetty and the plugin dependencies, and sets
+`GZ_VERSION`, `GZ_SIM_SYSTEM_PLUGIN_PATH`, `GZ_SIM_RESOURCE_PATH` and
+`GZ_FILE_PATH`, so no manual environment configuration is needed.
+
+```powershell
+git clone https://github.com/ArduPilot/ardupilot_gazebo
+cd ardupilot_gazebo
+pixi run build
+```
+
+The plugins are written to `build-win64` as `ArduPilotPlugin.dll` and so on.
+To skip GStreamer and OpenCV, and with them the video streaming plugin:
+
+```powershell
+pixi run cmake -S . -B build-win64 -G Ninja -DBUILD_GST_CAMERA_PLUGIN=OFF
+```
+
+#### Run
+
+```powershell
+pixi run iris
+```
+
+`pixi shell` opens a terminal with the environment already applied, from which
+the usual `gz sim -v4 -r iris_runway.sdf` works directly.
+
+#### Connecting ArduPilot SITL
+
+SITL does not build natively on Windows, so run it under WSL. The plugin binds
+`fdm_addr`, which defaults to `127.0.0.1`, and auto-detects where to reply
+from the packets it receives. Under WSL2's default NAT networking, SITL is on
+a different subnet to the Windows host, so the plugin has to listen on all
+interfaces — set `<fdm_addr>0.0.0.0</fdm_addr>` in the model's `<plugin>`
+element, and point SITL at the host with
+`sim_vehicle.py ... --sim-address=<windows-host-ip>`. WSL2's mirrored
+networking mode makes `127.0.0.1` work as-is instead.
+
+#### Known limitations
+
+Gazebo splits its path lists on `:` even on Windows, so every `C:\...` entry
+in `GZ_SIM_RESOURCE_PATH` is chopped in two and only the last fragment is used
+to resolve `model://` URIs. A drive-less absolute path still resolves against
+the current drive, so the workaround is to keep the models directory last in
+the list, which `scripts/pixi-activate.bat` does. Adding entries after it will
+break model loading with `Unable to find uri[model://...]`.
+
+The COLLADA meshes for `runway` and `zephyr` point at their textures relative
+to their own directory. Gazebo does not resolve those against the mesh location
+on Windows, so it falls back to `GZ_SIM_RESOURCE_PATH` and logs
+`Unable to find texture`. `GZ_FILE_PATH` is a separate lookup that does honour
+every entry, so `scripts/pixi-activate.bat` lists both mesh directories there.
+A new model whose mesh references textures this way needs its own entry.
+
+`DynamicFactory(): Unable to parse descriptor set from ... gz-msgs12.gz_desc`
+is printed at startup by the conda-forge build and is harmless.
+
 ## Configure
 
 Set the Gazebo environment variables in your `.bashrc` or `.zshrc` or in 

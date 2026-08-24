@@ -1420,7 +1420,7 @@ namespace
 {
 /// \brief Get a servo packet. Templated for 16 or 32 channel packets.
 template<typename TServoPacket>
-ssize_t getServoPacket(
+SocketSSize getServoPacket(
   SocketUDP &_sock,
   const char *&_fcu_address,
   uint16_t &_fcu_port_out,
@@ -1429,7 +1429,7 @@ ssize_t getServoPacket(
   TServoPacket &_pkt
 )
 {
-    ssize_t recvSize = _sock.recv(&_pkt, sizeof(TServoPacket), _waitMs);
+    SocketSSize recvSize = _sock.recv(&_pkt, sizeof(TServoPacket), _waitMs);
 
     _sock.get_client_address(_fcu_address, _fcu_port_out);
 
@@ -1487,7 +1487,7 @@ bool gz::sim::systems::ArduPilotPlugin::ReceiveServoPacket()
     uint16_t pkt_frame_rate{0};
     uint16_t pkt_frame_count{0};
     std::array<uint16_t, 32> pkt_pwm;
-    ssize_t recvSize{-1};
+    SocketSSize recvSize{-1};
     if (this->dataPtr->have32Channels)
     {
       servo_packet_32 pkt;

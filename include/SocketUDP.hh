@@ -18,13 +18,22 @@
 #ifndef SOCKETUDP_HH_
 #define SOCKETUDP_HH_
 
-#include <fcntl.h>
-#include <unistd.h>
+#include <cstddef>
+#include <cstdint>
 
 #ifdef _WIN32
+
+// winsock2.h must be reached before windows.h, otherwise the latter pulls in
+// the incompatible Winsock 1.1 declarations. The build defines
+// WIN32_LEAN_AND_MEAN globally so that windows.h never does so.
 #include <winsock2.h>
-#include <Ws2tcpip.h>
+#include <ws2tcpip.h>
+#include <basetsd.h>
+
 #else
+
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -33,6 +42,22 @@
 #include <arpa/inet.h>
 #include <sys/select.h>
 
+#endif
+
+#ifdef _WIN32
+/// \brief Native socket handle. Winsock uses an opaque unsigned handle rather
+/// than a file descriptor, so it must never be tested against negative values.
+using SocketHandle = SOCKET;
+
+/// \brief Signed byte count returned by socket I/O; POSIX ssize_t equivalent.
+using SocketSSize = SSIZE_T;
+
+/// \brief Sentinel value for a socket that is not open.
+inline constexpr SocketHandle kInvalidSocket = INVALID_SOCKET;
+#else
+using SocketHandle = int;
+using SocketSSize = ssize_t;
+inline constexpr SocketHandle kInvalidSocket = -1;
 #endif
 
 /// \brief Simple UDP socket handling class.
@@ -54,24 +79,27 @@ public:
     bool set_blocking(bool blocking);
 
     /// \brief Send data to address and port.
-    ssize_t
+    SocketSSize
     sendto(const void *buf, size_t size, const char *address, uint16_t port);
 
     /// \brief Receive data.
-    ssize_t recv(void *pkt, size_t size, uint32_t timeout_ms);
+    SocketSSize recv(void *pkt, size_t size, uint32_t timeout_ms);
 
     /// \brief Get last client address and port
     void get_client_address(const char *&ip_addr, uint16_t &port);
 
 private:
-    /// \brief File descriptor.
+    /// \brief Address of the last datagram received.
     struct sockaddr_in in_addr{};
 
-    /// \brief File descriptor.
-    int fd = -1;
+    /// \brief Socket handle.
+    SocketHandle fd = kInvalidSocket;
 
     /// \brief Poll for incoming data with timeout.
     bool pollin(uint32_t timeout_ms);
+
+    /// \brief Close the socket if it is open.
+    void close_socket();
 
     /// \brief Make a sockaddr_in struct from address and port.
     void make_sockaddr(const char *address, uint16_t port,
